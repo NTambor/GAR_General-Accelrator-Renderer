@@ -14,9 +14,9 @@
 */
 
 module warp_manager #(
-    parameter THREADS_PER_WARP = 32,
-    parameter THREADS_PER_BLOCK = 256,
-    parameter WARPS_PER_CORE = 8
+    parameter THREADS_PER_WARP = 4,
+    parameter THREADS_PER_BLOCK = 8,
+    parameter WARPS_PER_CORE = 2
     )(
     input wire clk,
     input wire reset,
@@ -24,9 +24,10 @@ module warp_manager #(
     //input reg [WARPS_PER_CORE:0] done,
     input wire [7:0] warps_states [WARPS_PER_CORE-1:0],
     input wire [1:0] warp_status [WARPS_PER_CORE-1:0],
-
+    output reg [THREADS_PER_WARP-1:0] masks [WARPS_PER_CORE-1:0],
     output reg [3:0] warp_ids [THREADS_PER_BLOCK-1:0],
     output reg [$clog2(THREADS_PER_BLOCK):0] thread_count,
+
     output reg done
 );
     // Calculate the total number of blocks based on total threads & threads per block
@@ -42,6 +43,9 @@ module warp_manager #(
         if (reset) begin
             warps_done <= 0;
             start_execution <=0;
+            for (int i = 0; i < WARPS_PER_CORE; i++) begin
+                masks[i] <= 4'b1111;
+            end
             for (int i = 1; i < THREADS_PER_BLOCK; i++) begin
                     warp_ids[i] <= (THREADS_PER_BLOCK/THREADS_PER_WARP);
             end

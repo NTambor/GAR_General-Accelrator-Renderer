@@ -10,7 +10,9 @@ module core #(
     parameter DATA_MEM_DATA_BITS = 8,
     parameter PROGRAM_MEM_ADDR_BITS = 8,
     parameter PROGRAM_MEM_DATA_BITS = 16,
-    parameter THREADS_PER_BLOCK = 4
+    parameter WARPS_PER_CORE = 2,
+    parameter THREADS_PER_WARP = 4,
+    parameter THREADS_PER_BLOCK = 8
 ) (
     input wire clk,
     input wire reset,
@@ -43,6 +45,12 @@ module core #(
     reg [2:0] core_state;
     reg [2:0] fetcher_state;
     reg [15:0] instruction;
+
+    //warp signals
+    reg [$clog2(WARPS_PER_CORE):0]warp_index;
+    wire [$clog2(WARPS_PER_CORE):0]warp_groups[THREADS_PER_BLOCK-1:0];
+    reg [THREADS_PER_WARP-1:0] masks [WARPS_PER_CORE-1:0];
+    reg[3:0] warp;
 
     // Intermediate Signals
     reg [7:0] current_pc;
@@ -111,13 +119,20 @@ module core #(
     );
 
     // Scheduler
-    scheduler #(
+    warp_scheduler #(
         .THREADS_PER_BLOCK(THREADS_PER_BLOCK),
+        .THREADS_PER_WARP(THREADS_PER_WARP),
+        .WARPS_PER_CORE(WARPS_PER_CORE)
     ) scheduler_instance (
         .clk(clk),
         .reset(reset),
         .start(start),
+        .thread_count(thread_count),
         .fetcher_state(fetcher_state),
+        .warp_index(warp_index),
+        .warp_groups(warp_groups),
+        .masks(masks),
+        .warp(warp),
         .core_state(core_state),
         .decoded_mem_read_enable(decoded_mem_read_enable),
         .decoded_mem_write_enable(decoded_mem_write_enable),
@@ -131,12 +146,12 @@ module core #(
     // Dedicated ALU, LSU, registers, & PC unit for each thread this core has capacity for
     genvar i;
     generate
-        for (i = 0; i < THREADS_PER_BLOCK; i = i + 1) begin : threads
+        for (i = 0; i < THREADS_PER_WARP; i = i + 1) begin : warps
             // ALU
             alu alu_instance (
                 .clk(clk),
                 .reset(reset),
-                .enable(i < thread_count),
+                .enable(masks[i] == 1),
                 .core_state(core_state),
                 .decoded_alu_arithmetic_mux(decoded_alu_arithmetic_mux),
                 .decoded_alu_output_mux(decoded_alu_output_mux),
@@ -149,7 +164,7 @@ module core #(
             lsu lsu_instance (
                 .clk(clk),
                 .reset(reset),
-                .enable(i < thread_count),
+                .enable(masks[i] == 1),
                 .core_state(core_state),
                 .decoded_mem_read_enable(decoded_mem_read_enable),
                 .decoded_mem_write_enable(decoded_mem_write_enable),
@@ -166,7 +181,30 @@ module core #(
                 .lsu_state(lsu_state[i]),
                 .lsu_out(lsu_out[i])
             );
+            // Program Counter
+            pc #(
+                .DATA_MEM_DATA_BITS(DATA_MEM_DATA_BITS),
+                .PROGRAM_MEM_ADDR_BITS(PROGRAM_MEM_ADDR_BITS)
+            ) pc_instance (
+                .clk(clk),
+                .reset(reset),
+                .enable(masks[i] == 1),
+                .core_state(core_state),
+                .decoded_nzp(decoded_nzp),
+                .decoded_immediate(decoded_immediate),
+                .decoded_nzp_write_enable(decoded_nzp_write_enable),
+                .decoded_pc_mux(decoded_pc_mux),
+                .alu_out(alu_out[i]),
+                .current_pc(current_pc),
+                .next_pc(next_pc[i])
+            );
+        end
+    endgenerate
 
+    // Dedicated ALU, LSU, registers, & PC unit for each thread this core has capacity for
+    genvar i;
+    generate
+        for (i = 0; i < THREADS_PER_BLOCK; i = i + 1) begin : threads
             // Register File
             registers #(
                 .THREADS_PER_BLOCK(THREADS_PER_BLOCK),
@@ -175,7 +213,7 @@ module core #(
             ) register_instance (
                 .clk(clk),
                 .reset(reset),
-                .enable(i < thread_count),
+                .enable((i < thread_count) && (warp_groups[i] == warp)),
                 .block_id(block_id),
                 .core_state(core_state),
                 .decoded_reg_write_enable(decoded_reg_write_enable),
@@ -189,24 +227,7 @@ module core #(
                 .rs(rs[i]),
                 .rt(rt[i])
             );
-
-            // Program Counter
-            pc #(
-                .DATA_MEM_DATA_BITS(DATA_MEM_DATA_BITS),
-                .PROGRAM_MEM_ADDR_BITS(PROGRAM_MEM_ADDR_BITS)
-            ) pc_instance (
-                .clk(clk),
-                .reset(reset),
-                .enable(i < thread_count),
-                .core_state(core_state),
-                .decoded_nzp(decoded_nzp),
-                .decoded_immediate(decoded_immediate),
-                .decoded_nzp_write_enable(decoded_nzp_write_enable),
-                .decoded_pc_mux(decoded_pc_mux),
-                .alu_out(alu_out[i]),
-                .current_pc(current_pc),
-                .next_pc(next_pc[i])
-            );
         end
     endgenerate
+
 endmodule
